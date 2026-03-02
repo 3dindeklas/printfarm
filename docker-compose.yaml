@@ -1,263 +1,170 @@
+## Usecase: Run multiple Printers on the same Host
+##
+## Assumptions:
+## * I have two printers
+## * One is called printer1, the other one printer2
+## * printer1 is using serial port /dev/ttyUSB0 and webcam /dev/video0
+## * printer2 is using serial port /dev/ttyUSB1 and webcam /dev/video1
+##
+## About this setup:
+## * Moonraker services for each printer are available via their unique port (8101 and 8201 in this example).
+## * Webcam services for each printer are available via their unique port (8102 and 8202 in this example)
+## * Fluidd is used as Web frontend and is accessible via 80
+## * You'll have to add your printers manually to fluidd via their moonraker ports eg. http://dockerhost:8101 and http://dockerhost:8201
+##
+## Setup:
+## 1. Check out prind and enter the repository
+##      > git clone https://github.com/mkuf/prind/
+##      > cd prind
+## 2. Create config files for each printer and set permissions
+##      > for i in printer1 printer2; do cp config/printer.cfg config/${i}.cfg; cp config/moonraker.conf config/${i}.moonraker.conf; done
+##      > chown -R 1000:1000 config
+## 3. Copy this file to the root of the repository, overwriting the original docker-compose.yaml
+##      > cp custom/docker-compose.custom.multiple-printers.yaml docker-compose.yaml
+## 4. For each printer create a klipper, moonraker and webcam service as shown below
+## 5. Make sure each service has a unique 'command' and is referencing the files created by 2.
+## 6. Add your printers config to their corresponding file
+## 7. Set the correct klippy_uds_address in the corresponding *.moonraker.conf
+## 8. Update the Devices used for the webcam services
+## 9. Start the stack
+##      > docker compose up -d
+
+## Common Templates
+x-klipper-svc: &klipper-svc
+  image: mkuf/klipper:latest
+  restart: unless-stopped
+  privileged: true
+  group_add:
+      - "20" # dialout group for serial port access
+  volumes:
+    - /dev:/dev
+    - ./config:/opt/printer_data/config
+    - run:/opt/printer_data/run
+    - gcode:/opt/printer_data/gcodes
+    - log:/opt/printer_data/logs
+
+x-moonraker-svc: &moonraker-svc
+  image: mkuf/moonraker:latest
+  restart: unless-stopped
+  volumes:
+    - /dev/null:/opt/klipper/config/null
+    - /dev/null:/opt/klipper/docs/null
+    - ./config:/opt/printer_data/config
+    - run:/opt/printer_data/run
+    - gcode:/opt/printer_data/gcodes
+    - log:/opt/printer_data/logs
+    - /run/dbus:/run/dbus
+    - /run/systemd:/run/systemd
+    # - /dev/klipper:/dev/klipper # This is needed to access the klipper sockets created by the klipper services, make sure to set correct permissions on the host for /dev/klipper and its content (eg. via udev rules)
+
 ## Service Definitions
 services:
-
-  ## Klippy Services
-  ##
-  klipper:
-    image: mkuf/klipper:latest
-    restart: unless-stopped
-    privileged: true
-    logging:
-      driver: none
-    depends_on:
-      init:
-        condition: service_completed_successfully
+  ## zwart
+  ## Access api via port 8101/tcp
+  zwart-klipper:
+    <<: *klipper-svc
     command: >
-      -I printer_data/run/klipper.tty
-      -a printer_data/run/klipper.sock
-      printer_data/config/printer.cfg
-      -l printer_data/logs/klippy.log
-    volumes:
-      - /dev:/dev
-      - ./config:/opt/printer_data/config
-      - run:/opt/printer_data/run
-      - gcode:/opt/printer_data/gcodes
-      - log:/opt/printer_data/logs
+      -I printer_data/run/zwart.klipper.tty
+      -a printer_data/run/zwart.klipper.sock
+      printer_data/config/zwart.cfg
+      -l printer_data/logs/zwart.klippy.log
     labels:
       org.prind.service: klipper
-
-  ## WebApi
-  ##
-  moonraker:
-    image: mkuf/moonraker:latest
-    restart: unless-stopped
-    pid: host
-    logging:
-      driver: none
-    depends_on:
-      init:
-        condition: service_completed_successfully
-      klipper:
-        condition: service_started
-    volumes:
-      - /dev/null:/opt/klipper/config/null
-      - /dev/null:/opt/klipper/docs/null
-      - /run/dbus:/run/dbus
-      - /run/systemd:/run/systemd
-      - run:/opt/printer_data/run
-      - gcode:/opt/printer_data/gcodes
-      - log:/opt/printer_data/logs
-      - moonraker-db:/opt/printer_data/database
-      - ./config:/opt/printer_data/config
-    profiles:
-      - fluidd
-      - mainsail
-      - klipperscreen
-      - moonraker-telegram-bot
-      - mobileraker_companion
+      org.prind.printer: zwart
+  zwart-moonraker:
+    <<: *moonraker-svc
+    command: >
+      -d printer_data
+      -c printer_data/config/zwart.moonraker.conf
+      -l printer_data/logs/zwart.moonraker.log
+    ports:
+      - 8101:7125
     labels:
       org.prind.service: moonraker
-      traefik.enable: true
-      traefik.http.services.moonraker.loadbalancer.server.port: 7125
-      traefik.http.routers.moonraker.rule: PathRegexp(`^/(websocket|printer|api|access|machine|server)`)
-      traefik.http.routers.moonraker.entrypoints: web
+      org.prind.printer: zwart
 
-  ## Frontends
-  ##
-  octoprint:
-    image: octoprint/octoprint:minimal
-    restart: unless-stopped
-    depends_on:
-      klipper:
-        condition: service_started
-    privileged: true
-    volumes:
-      - /dev:/dev
-      - run:/opt/printer_data/run
-      - octoprint:/octoprint
-      - ./config/octoprint.yaml:/octoprint/octoprint/config.yaml
-    profiles:
-      - octoprint
+  ## wit
+  ## Access api via port 8101/tcp
+  wit-klipper:
+    <<: *klipper-svc
+    command: >
+      -I printer_data/run/wit.klipper.tty
+      -a printer_data/run/wit.klipper.sock
+      printer_data/config/wit.cfg
+      -l printer_data/logs/wit.klippy.log
     labels:
-      org.prind.service: octoprint
-      traefik.enable: true
-      traefik.http.services.octoprint.loadbalancer.server.port: 5000
-      traefik.http.routers.octoprint.rule: PathPrefix(`/`)
-      traefik.http.routers.octoprint.entrypoints: web
+      org.prind.service: klipper
+      org.prind.printer: wit
+  wit-moonraker:
+    <<: *moonraker-svc
+    command: >
+      -d printer_data
+      -c printer_data/config/wit.moonraker.conf
+      -l printer_data/logs/wit.moonraker.log
+    ports:
+      - 8201:7125
+    labels:
+      org.prind.service: moonraker
+      org.prind.printer: wit
 
+  ## paars
+  ## Access api via port 8101/tcp
+  paars-klipper:
+    <<: *klipper-svc
+    command: >
+      -I printer_data/run/paars.klipper.tty
+      -a printer_data/run/paars.klipper.sock
+      printer_data/config/paars.cfg
+      -l printer_data/logs/paars.klippy.log
+    labels:
+      org.prind.service: klipper
+      org.prind.printer: paars
+  paars-moonraker:
+    <<: *moonraker-svc
+    command: >
+      -d printer_data
+      -c printer_data/config/paars.moonraker.conf
+      -l printer_data/logs/paars.moonraker.log
+    ports:
+      - 8301:7125
+    labels:
+      org.prind.service: moonraker
+      org.prind.printer: paars
+
+  ## blauw
+  ## Access api via port 8101/tcp
+  # blauw-klipper:
+  #   <<: *klipper-svc
+  #   command: >
+  #     -I printer_data/run/blauw.klipper.tty
+  #     -a printer_data/run/blauw.klipper.sock
+  #     printer_data/config/blauw.cfg
+  #     -l printer_data/logs/blauw.klippy.log
+  #   labels:
+  #     org.prind.service: klipper
+  #     org.prind.printer: blauw
+  # blauw-moonraker:
+  #   <<: *moonraker-svc
+  #   command: >
+  #     -d printer_data
+  #     -c printer_data/config/blauw.moonraker.conf
+  #     -l printer_data/logs/blauw.moonraker.log
+  #   ports:
+  #     - 8401:7125
+  #   labels:
+  #     org.prind.service: moonraker
+  #     org.prind.printer: blauw
+
+  ## Use Fluidd as Frontend
   fluidd:
     image: ghcr.io/fluidd-core/fluidd:latest
     restart: unless-stopped
-    profiles:
-      - fluidd
+    ports:
+      - 80:80
     labels:
       org.prind.service: fluidd
-      traefik.enable: true
-      traefik.http.services.fluidd.loadbalancer.server.port: 80
-      traefik.http.routers.fluidd.rule: PathPrefix(`/`)
-      traefik.http.routers.fluidd.entrypoints: web
-
-  mainsail:
-    image: ghcr.io/mainsail-crew/mainsail:edge
-    restart: unless-stopped
-    profiles:
-      - mainsail
-    labels:
-      org.prind.service: mainsail
-      traefik.enable: true
-      traefik.http.services.mainsail.loadbalancer.server.port: 80
-      traefik.http.routers.mainsail.rule: PathPrefix(`/`)
-      traefik.http.routers.mainsail.entrypoints: web
-
-  ## additional Services
-  ##
-  klipperscreen:
-    image: mkuf/klipperscreen:latest
-    restart: unless-stopped
-    network_mode: host
-    pid: host
-    profiles:
-      - klipperscreen
-    volumes:
-      - /run/dbus:/run/dbus
-      - /run/systemd:/run/systemd
-      - /etc/localtime:/etc/localtime:ro
-      - /tmp/.X11-unix:/tmp/.X11-unix
-      - ./config:/opt/cfg
-    labels:
-      org.prind.service: klipperscreen
-
-  moonraker-telegram-bot:
-    image: lefskiy/moonraker-telegram-bot:latest
-    restart: unless-stopped
-    logging:
-      driver: none
-    profiles:
-      - moonraker-telegram-bot
-    volumes:
-      - gcode:/opt/printer_data/gcodes
-      - log:/opt/printer_data/logs
-      - ./config:/opt/printer_data/config
-    labels:
-      org.prind.service: moonraker-telegram-bot
-
-  mobileraker_companion:
-    image: ghcr.io/clon1998/mobileraker_companion:latest
-    restart: unless-stopped
-    profiles:
-      - mobileraker_companion
-    volumes:
-      - ./config:/opt/printer_data/config
-    labels:
-      org.prind.service: mobileraker_companion
-
-  hostmcu:
-    image: mkuf/klipper:latest-hostmcu
-    restart: unless-stopped
-    privileged: true
-    volumes:
-      - /dev:/dev
-      - run:/opt/printer_data/run
-    profiles:
-      - hostmcu
-    labels:
-      org.prind.service: hostmcu
-
-  moonraker-obico:
-    image: ghcr.io/thespaghettidetective/moonraker-obico:latest
-    restart: unless-stopped
-    privileged: true
-    volumes:
-      - ./config:/opt/printer_data/config
-      - log:/opt/printer_data/logs
-    profiles:
-      - moonraker-obico
-    labels:
-      org.prind.service: moonraker-obico
-
-  spoolman:
-    image: ghcr.io/donkie/spoolman:latest
-    restart: unless-stopped
-    volumes:
-      - spoolman-db:/home/app/.local/share/spoolman
-    profiles:
-      - spoolman
-    environment:
-      SPOOLMAN_BASE_PATH: /spoolman
-    labels:
-      org.prind.service: spoolman
-      traefik.enable: true
-      traefik.http.services.octoprint.loadbalancer.server.port: 8000
-      traefik.http.routers.octoprint.rule: PathPrefix(`/spoolman`)
-      traefik.http.routers.octoprint.entrypoints: web
-
-  octoeverywhere:
-    image: octoeverywhere/octoeverywhere:latest
-    restart: unless-stopped
-    volumes:
-      - octoeverywhere-data:/data
-    profiles:
-      - octoeverywhere
-    environment:
-      COMPANION_MODE: klipper
-      MOONRAKER_PORT: 80
-    labels:
-      org.prind.service: octoeverywhere
-
-  laserweb:
-    image: mkuf/laserweb:latest
-    restart: unless-stopped
-    profiles:
-      - laserweb
-    labels:
-      org.prind.service: laserweb
-      traefik.enable: true
-      traefik.http.services.laserweb.loadbalancer.server.port: 80
-      traefik.http.routers.laserweb.rule: PathPrefix(`/laserweb`)
-      traefik.http.routers.laserweb.entrypoints: web
-      traefik.http.routers.laserweb.middlewares: strip-laserweb@docker
-      traefik.http.middlewares.strip-laserweb.stripprefix.prefixes: /laserweb
-
-  ## Accompanying Services/Infra
-  ##
-
-  ## Config dir needs to be writable by uid/gid 1000
-  ## This container sets the right permissions and exits
-  init:
-    image: busybox:latest
-    command: chown -R 1000:1000 /prind/config
-    volumes:
-      - .:/prind
-    labels:
-      org.prind.service: init
-
-  ## Loadbalancer/Proxy
-  traefik:
-    image: traefik:3.6
-    command:
-      - "--accesslog"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-    ports:
-      - "80:80"
-    restart: unless-stopped
-    volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
-    labels:
-      org.prind.service: traefik
 
 volumes:
   run:
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
   gcode:
-  octoprint:
-  moonraker-db:
   log:
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
-  spoolman-db:
-  octoeverywhere-data:
